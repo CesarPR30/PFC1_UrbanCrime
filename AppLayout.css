@@ -1,0 +1,1317 @@
+:root {
+  --sidebar-width-open: 340px;
+  --sidebar-width-closed: 0px;
+  --header-height: 52px;
+  --bottom-panel-height: 210px;
+  --right-panel-width: 280px;
+
+  /* UI / navegación */
+  --color-primary: #148F93;
+  --color-primary-dark: #0E6B6F;
+  --color-primary-light: #E6F6F6;
+
+  /* Datos de crimen */
+  --color-crime: #FE550B;
+  --color-crime-dark: #D44208;
+  --color-crime-light: #FFF0EB;
+
+  --color-bg: #f9fafb;
+  --color-surface: #ffffff;
+  --color-border: #e5e7eb;
+  --color-text: #111827;
+  --color-text-muted: #6b7280;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+/* ── Layout raíz ─────────────────────────────── */
+.layout {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--color-bg);
+}
+
+.layout__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* ── Workspace = contenido + paneles ─────────── */
+.layout__workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Viewport = mapa + panel inferior */
+.layout__viewport {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout__content {
+  flex: 1;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Header ─────────────────────────────── */
+.header {
+  height: var(--header-height);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 24px;
+  background: var(--color-primary);
+  border-bottom: 1px solid var(--color-primary-dark);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.header__title {
+  font-size: 17px;
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 0.01em;
+}
+
+/* ── Sidebar ─────────────────────────────── */
+.sidebar {
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  transition: width 0.25s ease;
+  position: relative;
+  flex-shrink: 0;
+  z-index: 500;
+}
+
+.sidebar--open {
+  width: var(--sidebar-width-open);
+}
+
+.sidebar--closed {
+  width: var(--sidebar-width-closed);
+}
+
+.sidebar__inner {
+  overflow-y: auto;
+  overflow-x: hidden;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebar__logo {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.sidebar__logo-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.sidebar__logo-text {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-primary);
+  white-space: nowrap;
+}
+
+/* ── Botón toggle del sidebar ─────────────────── */
+.sidebar__toggle-btn {
+  position: absolute;
+  right: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 40px;
+  border-radius: 0 8px 8px 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: none;
+  box-shadow: 3px 0 6px rgba(0, 0, 0, 0.12);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  z-index: 2000;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+  padding: 0;
+}
+
+.sidebar__toggle-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* ── Panel inferior (línea de tiempo) ────────── */
+.layout__bottom-panel {
+  position: relative;
+  background: var(--color-surface);
+  border-top: 1px solid var(--color-border);
+  transition: height 0.25s ease;
+  overflow: visible;
+  flex-shrink: 0;
+  z-index: 500;
+}
+
+.layout__bottom-panel--open {
+  height: var(--bottom-panel-height);
+}
+
+.layout__bottom-panel--closed {
+  height: 0;
+}
+
+.layout__bottom-panel-inner {
+  overflow: hidden;
+  height: 100%;
+  width: 100%;
+}
+
+/* ── Panel derecho (tipos de delito) ─────────── */
+.layout__right-panel {
+  position: relative;
+  background: var(--color-surface);
+  border-left: 1px solid var(--color-border);
+  transition: width 0.25s ease;
+  overflow: visible;
+  flex-shrink: 0;
+  z-index: 500;
+}
+
+.layout__right-panel--open {
+  width: var(--right-panel-width);
+}
+
+.layout__right-panel--closed {
+  width: 0;
+}
+
+.layout__right-panel-inner {
+  overflow-y: auto;
+  overflow-x: hidden;
+  height: 100%;
+  width: var(--right-panel-width);
+}
+
+/* ── Botones toggle compartidos ──────────────── */
+.panel-toggle-btn {
+  position: absolute;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-text-muted);
+  z-index: 2000;
+  transition: background 0.15s, color 0.15s;
+  line-height: 1;
+  padding: 0;
+}
+
+.panel-toggle-btn:hover {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
+
+/* Botón del panel inferior: tab que sale por arriba, centrado horizontalmente */
+.panel-toggle-btn--bottom {
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 52px;
+  height: 18px;
+  border-radius: 8px 8px 0 0;
+  border-bottom: none;
+  box-shadow: 0 -3px 6px rgba(0, 0, 0, 0.1);
+}
+
+/* Botón del panel derecho: tab que sale por la izquierda, centrado verticalmente */
+.panel-toggle-btn--right {
+  left: -16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 40px;
+  border-radius: 8px 0 0 8px;
+  border-right: none;
+  box-shadow: -3px 0 6px rgba(0, 0, 0, 0.1);
+}
+
+/* ── Estilos internos de paneles ─────────────── */
+.timeline-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 10px 20px 8px;
+}
+
+.timeline-panel__header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-shrink: 0;
+  margin-bottom: 6px;
+}
+
+.timeline-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.timeline-panel__subtitle {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.timeline-panel__filter-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  padding: 2px 4px 2px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(20, 143, 147, 0.25);
+}
+
+.timeline-panel__clear-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--color-primary);
+  font-size: 15px;
+  line-height: 1;
+  padding: 0 2px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  transition: color 0.15s;
+}
+
+.timeline-panel__clear-btn:hover {
+  color: var(--color-primary-dark);
+}
+
+.timeline-panel__chart {
+  flex: 1;
+  min-height: 0;
+}
+
+.crime-type-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 16px 12px;
+  gap: 16px;
+}
+
+.crime-type-panel__header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.crime-type-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.crime-type-panel__subtitle {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.crime-type-panel__section {
+  flex-shrink: 0;
+}
+
+.crime-type-panel__section-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+
+/* ── Sidebar · Candidate pool (draggable) ────── */
+.candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 14px 20px;
+  border-top: 1px solid var(--color-border);
+}
+
+.candidates__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.candidates__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.candidates__hint {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.candidates__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.candidates__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  cursor: grab;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.candidates__item:hover {
+  border-color: var(--color-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.candidates__item:active {
+  cursor: grabbing;
+}
+
+.candidates__item--ref {
+  border-color: var(--color-crime);
+  background: var(--color-crime-light);
+}
+
+.candidates__grip {
+  color: #cbd5e1;
+  font-size: 12px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.candidates__info {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+  flex: 1;
+}
+
+.candidates__rank {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.candidates__ref-tag {
+  font-style: normal;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--color-crime);
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+.candidates__month {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.candidates__crimes {
+  font-size: 10px;
+  color: var(--color-text-muted);
+}
+
+.candidates__sim {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-primary);
+  flex-shrink: 0;
+}
+
+.candidates__add {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.candidates__add-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.candidates__add-btn--a:hover {
+  background: #FE550B;
+  border-color: #FE550B;
+  color: #fff;
+}
+
+.candidates__add-btn--b:hover {
+  background: #0D9488;
+  border-color: #0D9488;
+  color: #fff;
+}
+
+/* ── Right panel · Comparison builder (A vs B) ── */
+.cmpb {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 12px 22px;
+}
+
+.cmpb__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cmpb__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.cmpb__clear {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+
+.cmpb__clear:hover {
+  color: var(--color-crime);
+}
+
+.cmpb__zones {
+  display: flex;
+  gap: 8px;
+}
+
+.cmpb__zone {
+  flex: 1;
+  min-width: 0;
+  border: 1px dashed var(--color-border);
+  border-top: 3px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px;
+  background: var(--color-bg);
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.cmpb__zone--over {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+
+.cmpb__zone-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.cmpb__zone-tag {
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.cmpb__zone-total {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.cmpb__zone-sub {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  width: 100%;
+}
+
+.cmpb__zone-empty {
+  font-size: 11px;
+  color: #9ca3af;
+  text-align: center;
+  margin: 10px 0 4px;
+}
+
+.cmpb__chips {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cmpb__chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+}
+
+.cmpb__chip-go {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+.cmpb__chip-go:disabled {
+  cursor: default;
+}
+
+.cmpb__chip-go:not(:disabled):hover .cmpb__chip-id {
+  color: var(--color-primary);
+}
+
+.cmpb__chip-id {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text);
+  flex: 1;
+  min-width: 0;
+}
+
+.cmpb__chip-month {
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+}
+
+.cmpb__chip-x {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.cmpb__chip-x:hover {
+  background: var(--color-crime-light);
+  color: var(--color-crime);
+}
+
+.cmpb__hint {
+  font-size: 12px;
+  line-height: 1.5;
+  color: #9ca3af;
+  text-align: center;
+  margin: 8px 4px;
+}
+
+.cmpb__history {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* ── Sidebar · Similar hotspots panel ────────── */
+.sidebar__similar {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 14px 20px;
+  border-top: 1px solid var(--color-border);
+}
+
+.sidebar__similar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.sidebar__similar-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+}
+
+.sidebar__similar-origin {
+  display: block;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.sidebar__similar-meta {
+  display: block;
+  font-size: 10px;
+  color: #9ca3af;
+  margin-top: 1px;
+}
+
+.sidebar__similar-sublabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 7px;
+}
+
+.sidebar__similar-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.sidebar__similar-empty {
+  font-size: 11px;
+  color: #9ca3af;
+  margin: 0;
+}
+
+.sidebar__similar-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sidebar__similar-item {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 38px 1fr auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #f9fafb;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.sidebar__similar-item:hover {
+  background: var(--color-primary-light);
+  border-color: var(--color-primary);
+}
+
+.sidebar__similar-item--compared {
+  border-color: #0d9488;
+  background: #f0fdfa;
+}
+
+/* "vs" — toggles the side-by-side comparison against the reference subgraph */
+.sidebar__vs-btn {
+  font-size: 10px;
+  font-weight: 700;
+  color: #0d9488;
+  background: #fff;
+  border: 1px solid #99f6e4;
+  border-radius: 5px;
+  padding: 3px 7px;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  flex-shrink: 0;
+}
+
+.sidebar__vs-btn:hover {
+  background: #ccfbf1;
+  border-color: #0d9488;
+}
+
+.sidebar__vs-btn--active {
+  background: #0d9488;
+  border-color: #0d9488;
+  color: #fff;
+}
+
+.sidebar__similar-rank {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-crime);
+}
+
+.sidebar__similar-month-label {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar__similar-bar-wrap {
+  width: 36px;
+  height: 4px;
+  background: #e5e7eb;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.sidebar__similar-bar {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.sidebar__similar-pct {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-primary);
+  min-width: 28px;
+  text-align: right;
+}
+
+/* ── Panel UMAP de subgrafos (sidebar izquierdo) ──────────────── */
+.umap-panel {
+  padding: 14px 14px 6px;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.umap-panel__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.umap-panel__header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.umap-panel__tools {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.umap-panel__tool {
+  font-size: 11px;
+  font-weight: 600;
+  color: #4b5563;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 3px 9px;
+  cursor: pointer;
+  line-height: 1.4;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.umap-panel__tool:hover {
+  background: #f3f4f6;
+}
+
+.umap-panel__tool--active {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.umap-panel__svg--lasso {
+  cursor: crosshair;
+}
+
+.umap-panel__title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.umap-panel__subtitle {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.umap-panel__plot-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.umap-panel__svg {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #f9fafb;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  display: block;
+}
+
+.umap-panel__svg circle {
+  transition: r 0.12s ease, fill-opacity 0.12s ease;
+}
+
+.umap-panel__tooltip {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(17, 24, 39, 0.92);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.35;
+  padding: 5px 8px;
+  border-radius: 6px;
+  pointer-events: none;
+  max-width: 90%;
+}
+
+.umap-panel__legend {
+  list-style: none;
+  margin: 8px 0 4px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+}
+
+.umap-panel__legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.umap-panel__legend-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.umap-panel__legend-label {
+  font-size: 10px;
+  color: #6b7280;
+}
+
+.umap-panel__empty {
+  padding: 16px 14px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* ── UMAP · controles segmentados (espacio de embedding / color) ── */
+.umap-panel__segs {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  margin: 6px 0 2px;
+  flex-wrap: wrap;
+}
+
+.umap-panel__seg {
+  display: inline-flex;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.umap-panel__seg-btn {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6b7280;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  padding: 3px 8px;
+  cursor: pointer;
+  line-height: 1.4;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+
+.umap-panel__seg-btn:last-child {
+  border-right: none;
+}
+
+.umap-panel__seg-btn:hover {
+  background: #f3f4f6;
+}
+
+.umap-panel__seg-btn--active {
+  background: var(--color-primary);
+  color: #fff;
+}
+
+/* ── UMAP · leyenda de gradiente (modo "Nº delitos") ── */
+.umap-panel__gradient-legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 4px;
+}
+
+.umap-panel__gradient-bar {
+  flex: 1;
+  height: 8px;
+  border-radius: 3px;
+}
+
+/* ── Panel de evolución histórica (footprint del subgrafo) ── */
+.history-panel {
+  margin: 0 0 12px;
+  padding: 10px 10px 8px;
+  background: #f9fafb;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.history-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.history-panel__title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #374151;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.history-panel__hover {
+  font-size: 10px;
+  color: #374151;
+  white-space: nowrap;
+}
+
+.history-panel__hover--muted {
+  color: #9ca3af;
+}
+
+.history-panel__svg {
+  width: 100%;
+  display: block;
+}
+
+.history-panel__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 12px;
+  margin-top: 4px;
+}
+
+.history-panel__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 9px;
+  color: #6b7280;
+}
+
+.history-panel__legend-swatch {
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ── Panel de comparación A vs B ── */
+.compare-panel {
+  margin-top: 12px;
+  padding: 12px 10px;
+  background: #fff;
+  border: 1px solid #99f6e4;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(13, 148, 136, 0.08);
+}
+
+.compare-panel__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.compare-panel__title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #111827;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.compare-panel__similarity {
+  font-weight: 500;
+  color: #0d9488;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.compare-panel__close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 17px;
+  color: #9ca3af;
+  line-height: 1;
+  padding: 0 2px;
+}
+
+.compare-panel__close:hover {
+  color: #374151;
+}
+
+.compare-panel__cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.compare-panel__card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 8px 10px;
+  background: #f9fafb;
+  border: 1px solid var(--color-border);
+  border-top: 3px solid;
+  border-radius: 8px;
+}
+
+.compare-panel__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 2px;
+}
+
+.compare-panel__card-tag {
+  font-size: 10px;
+  font-weight: 800;
+  color: #fff;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+
+.compare-panel__card-id {
+  font-size: 11px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.compare-panel__card-crimes {
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.compare-panel__card-sub {
+  font-size: 9px;
+  color: #9ca3af;
+}
+
+.compare-panel__card-meta {
+  font-size: 9px;
+  color: #6b7280;
+  margin-top: 3px;
+}
+
+.compare-panel__headline {
+  font-size: 11px;
+  font-weight: 600;
+  color: #b91c1c;
+  background: #fef2f2;
+  border-radius: 6px;
+  padding: 5px 9px;
+  margin-bottom: 10px;
+  text-align: center;
+}
+
+.compare-panel__headline--down {
+  color: #047857;
+  background: #ecfdf5;
+}
+
+.compare-panel__section-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #9ca3af;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 10px 0 5px;
+}
+
+.compare-panel__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* Fila espejada: barra de A crece hacia la izquierda, la de B hacia la derecha */
+.compare-panel__row {
+  display: grid;
+  grid-template-columns: 22px 1fr minmax(86px, auto) 1fr 22px;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 3px;
+  border-radius: 5px;
+}
+
+.compare-panel__row--exclusive {
+  background: #fefce8;
+}
+
+.compare-panel__row-val {
+  font-size: 9px;
+  font-weight: 600;
+  color: #374151;
+  text-align: center;
+}
+
+.compare-panel__row-bar {
+  height: 7px;
+  background: #f3f4f6;
+  border-radius: 3px;
+  overflow: hidden;
+  display: flex;
+}
+
+.compare-panel__row-bar--a {
+  justify-content: flex-end;
+}
+
+.compare-panel__row-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.25s ease;
+}
+
+.compare-panel__row-label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 9px;
+  color: #374151;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compare-panel__row-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.compare-panel__row-flag {
+  font-style: normal;
+  font-size: 8px;
+  font-weight: 700;
+  color: #a16207;
+  background: #fef9c3;
+  border-radius: 3px;
+  padding: 0 4px;
+}
+
+.compare-panel__empty {
+  font-size: 10px;
+  color: #9ca3af;
+  margin: 0;
+}
