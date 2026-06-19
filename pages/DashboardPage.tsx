@@ -12,12 +12,23 @@ import { useHotspotStore } from "../store/useHotspotStore";
 const DashboardPage: React.FC = () => {
   const { data, loading, error } = useCrimeData(`${import.meta.env.BASE_URL}crimes.csv`);
   const { data: hotspotsData } = useHotspots();
-  const { selectedItem } = useHotspotStore();
+  const { selectedItem, triggerFlyTo } = useHotspotStore();
   const [filteredData, setFilteredData] = useState<CrimeRecord[] | null>(null);
 
   const handleFilter = useCallback((filtered: CrimeRecord[]) => {
     setFilteredData(filtered);
   }, []);
+
+  // Clicking a timeline marker just flies the map to that subgraph (it's already
+  // drawn as part of the current selection) — same "look, don't re-select"
+  // behaviour as clicking a row in the left candidate list.
+  const handleMarkerClick = useCallback(
+    (month: string, rank: number) => {
+      const spot = hotspotsData?.[month]?.find((s) => s.rank === rank);
+      if (spot?.center) triggerFlyTo(spot.center[0], spot.center[1]);
+    },
+    [hotspotsData, triggerFlyTo],
+  );
 
   // null = no filter applied, use all data
   const displayData = filteredData ?? data;
@@ -28,12 +39,19 @@ const DashboardPage: React.FC = () => {
     if (!selectedItem || !hotspotsData) return [];
     const sel = hotspotsData[selectedItem.month]?.find((s) => s.rank === selectedItem.rank);
     if (!sel) return [];
+    // "R" tags the reference; the similars get "A", "B", … in similarity order,
+    // matching the letters shown in the left-hand candidate list.
     const out: TimelineMarker[] = [
-      { month: selectedItem.month, rank: selectedItem.rank, kind: "selected" },
+      { month: selectedItem.month, rank: selectedItem.rank, kind: "selected", label: "R" },
     ];
-    for (const sim of sel.similarTo ?? []) {
-      out.push({ month: sim.month, rank: sim.rank, kind: "similar" });
-    }
+    (sel.similarTo ?? []).forEach((sim, i) => {
+      out.push({
+        month: sim.month,
+        rank: sim.rank,
+        kind: "similar",
+        label: String.fromCharCode(65 + i), // 65 = "A"
+      });
+    });
     return out;
   }, [selectedItem, hotspotsData]);
 
@@ -59,7 +77,7 @@ const DashboardPage: React.FC = () => {
     <AppLayout
       title="Urban Crime Dashboard"
       activePath="/"
-      bottomPanel={<TimelinePanel data={data} onFilter={handleFilter} markers={timelineMarkers} />}
+      bottomPanel={<TimelinePanel data={data} onFilter={handleFilter} markers={timelineMarkers} onMarkerClick={handleMarkerClick} />}
       rightPanel={<ComparisonBuilder />}
     >
       <CrimeMap data={displayData} />

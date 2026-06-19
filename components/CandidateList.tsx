@@ -98,7 +98,12 @@ const CandidateList: React.FC = () => {
       </div>
 
       <ul className="candidates__list">
-        {candidates.map((c) => (
+        {candidates.map((c, i) => {
+          // "R" for the reference, then "A", "B", … for the similars in order —
+          // the same letters used on the timeline markers. Only in reference mode.
+          const letter =
+            mode === "ref" ? (i === 0 ? "R" : String.fromCharCode(64 + i)) : null;
+          return (
           <li
             key={keyOf(c.item)}
             className={"candidates__item" + (c.isRef ? " candidates__item--ref" : "")}
@@ -115,6 +120,17 @@ const CandidateList: React.FC = () => {
               if (c.spot.center) triggerFlyTo(c.spot.center[0], c.spot.center[1]);
             }}
           >
+            {letter && (
+              <span
+                className={
+                  "candidates__letter" +
+                  (c.isRef ? " candidates__letter--ref" : " candidates__letter--sim")
+                }
+                aria-hidden
+              >
+                {letter}
+              </span>
+            )}
             <span className="candidates__grip" aria-hidden>⠿</span>
             <SubgraphGlyph spot={c.spot} size={34} muted={!c.isRef} />
             <span className="candidates__info">
@@ -149,7 +165,8 @@ const CandidateList: React.FC = () => {
               </button>
             </span>
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );

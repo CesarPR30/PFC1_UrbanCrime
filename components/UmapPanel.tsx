@@ -8,10 +8,11 @@ import { CRIME_ORDER, crimeColor, crimeLabel } from "../theme";
 /**
  * UmapPanel — left-hand 2-D map of every crime subgraph.
  *
- * Each point is one monthly hotspot subgraph, positioned by `embed2d`: the
- * UMAP projection of its fused descriptor (NetLSD topology + historical
- * footprint + POI land-use mix + crime composition) computed offline. Points
- * that sit close together are structurally / temporally / functionally alike.
+ * Each point is one monthly hotspot subgraph, positioned by the selected
+ * technique's 2-D embedding (GL2Vec / FEATHER / DHC-E): the UMAP projection of
+ * the descriptor each technique computes from the basin's road sub-network,
+ * computed offline. Points that sit close together are structurally alike under
+ * that technique.
  *
  * Colour encodes the dominant crime type so clusters are readable at a glance;
  * clicking a point selects that subgraph (and flies the map to it). When a
@@ -26,13 +27,18 @@ import { CRIME_ORDER, crimeColor, crimeLabel } from "../theme";
  * membership is decided with d3.polygonContains. The resulting set is shared
  * through the store so the crime map highlights the same subgraphs.
  *
- * EMBEDDING SPACES — the scatter can be laid out in two precomputed spaces,
- * both built only from the road network (crime never shapes the layout, so
- * "neighbours with different crime" is always a legitimate finding):
- *   Topología   (embedTopo) – road-network shape only (NetLSD + geometry).
- *   Topo+Vía    (embed2d)   – shape + road hierarchy (expressway / avenue /
- *                             collector / street): same shape but built of
- *                             avenues vs. residential streets now separates.
+ * EMBEDDING SPACES — the scatter can be laid out under four modern whole-graph
+ * embedding techniques, each computed offline from the road sub-network only
+ * (crime never shapes the layout, so "neighbours with different crime" is always
+ * a legitimate finding), and each backed by a recent paper:
+ *   GL2Vec   (embedGL2Vec)  – Chen & Koga, ICONIP 2019. graph2vec of the graph
+ *                             ⊕ of its line graph (road-segment structure).
+ *   FEATHER  (embedFeather) – Rozemberczki & Sarkar, CIKM 2020. Characteristic
+ *                             functions of node features over random walks.
+ *   DHC-E    (embedDHCE)    – Wang et al., 2022. Entropy of the Degree→H-index→
+ *                             Coreness chain; hyperparameter-free, explainable.
+ *   GCN      (embedGCN)     – Kipf & Welling, 2017; the ST-GCN spatial embedding
+ *                             of Fan, Hu & Hu, 2025. Graph convolution + pooling.
  * Colour can encode the dominant crime type (categorical) or the crime count
  * (sequential ramp) — the latter is how you *see* whether structurally similar
  * zones share crime levels.
@@ -64,6 +70,7 @@ interface Pt {
   y: number;
   crimes: number;
   type: string;
+  cluster: number;
   center: [number, number] | null;
 }
 
@@ -71,28 +78,55 @@ const VB = 100; // SVG viewBox size; embed2d is in [0, 1] → scaled to [0, VB]
 
 const keyOf = (month: string, rank: number) => `${month}|${rank}`;
 
-/** Which precomputed 2-D projection lays out the scatter. */
-type EmbedSpace = "topo" | "topoRoad";
+/** Which precomputed 2-D projection (embedding technique) lays out the scatter. */
+type EmbedSpace = "gl2vec" | "feather" | "dhce" | "gcn";
 
 const SPACES: { id: EmbedSpace; label: string; title: string }[] = [
   {
-    id: "topo",
-    label: "Topología",
+    id: "gl2vec",
+    label: "GL2Vec",
     title:
-      "Solo la forma de la red vial (NetLSD + geometría). El crimen NO participa en la agrupación: vecinos con criminalidad distinta son un hallazgo.",
+      "GL2Vec (Chen & Koga, ICONIP 2019): graph2vec del subgrafo ⊕ graph2vec de su line graph (estructura de los segmentos viales). Embedding aprendido con Doc2Vec.",
   },
   {
-    id: "topoRoad",
-    label: "+Vía",
+    id: "feather",
+    label: "FEATHER",
     title:
-      "Topología + jerarquía vial (autopista / avenida / colectora / calle). Misma forma pero hecha de avenidas vs. calles residenciales se separa.",
+      "FEATHER-G (Rozemberczki & Sarkar, CIKM 2020): funciones características de los features de nodo sobre random walks a varias escalas. Determinista e invariante a isomorfismo.",
+  },
+  {
+    id: "dhce",
+    label: "DHC-E",
+    title:
+      "DHC-E (Wang et al., 2022): entropía de Shannon de la cadena Grado → H-index → Coreness. Sin hiperparámetros y explicable.",
+  },
+  {
+    id: "gcn",
+    label: "GCN",
+    title:
+      "GCN (Kipf & Welling, 2017): convolución de grafo con adyacencia normalizada + pooling. Es el módulo espacial ST-GCN de Fan, Hu & Hu (2025) para predecir crimen en Chicago; aquí sin entrenar (el crimen no forma el layout).",
   },
 ];
 
 function coordOf(s: Hotspot, space: EmbedSpace): [number, number] | undefined {
-  if (space === "topo") return s.embedTopo ?? s.embed2d;
-  return s.embed2d;
+  if (space === "gl2vec") return s.embedGL2Vec ?? s.embed2d;
+  if (space === "feather") return s.embedFeather ?? s.embed2d;
+  if (space === "dhce") return s.embedDHCE ?? s.embed2d;
+  return s.embedGCN ?? s.embed2d;
 }
+
+/** HDBSCAN cluster label of a subgraph in the active technique (−1 = noise). */
+function clusterOf(s: Hotspot, space: EmbedSpace): number {
+  if (space === "gl2vec") return s.clusterGL2Vec ?? -1;
+  if (space === "feather") return s.clusterFeather ?? -1;
+  if (space === "dhce") return s.clusterDHCE ?? -1;
+  return s.clusterGCN ?? -1;
+}
+
+// Categorical palette for HDBSCAN clusters (cycled if a layout has more than
+// this many clusters). Noise (−1) is painted a neutral light grey.
+const CLUSTER_PALETTE = [...d3.schemeCategory10, ...d3.schemeSet3];
+const NOISE_COLOR = "#cbd5e1";
 
 const UmapPanel: React.FC = () => {
   const { data, loading } = useHotspots();
@@ -104,8 +138,8 @@ const UmapPanel: React.FC = () => {
 
   // Embedding space + colour encoding ("type" = dominant crime type,
   // "count" = sequential ramp by crime volume).
-  const [space, setSpace] = useState<EmbedSpace>("topoRoad");
-  const [colorMode, setColorMode] = useState<"type" | "count">("type");
+  const [space, setSpace] = useState<EmbedSpace>("gl2vec");
+  const [colorMode, setColorMode] = useState<"type" | "count" | "cluster">("type");
 
   // Lasso tooling: a toggle for the mode, the live loop being drawn (in viewBox
   // coordinates), and refs so the d3-drag handlers always see current values.
@@ -129,6 +163,7 @@ const UmapPanel: React.FC = () => {
           y: (1 - xy[1]) * VB,
           crimes: s.crimes,
           type: dominantType(s),
+          cluster: clusterOf(s, space),
           center: s.center,
         });
       }
@@ -241,8 +276,25 @@ const UmapPanel: React.FC = () => {
   // low-count tail distinguishable; 0.12 offset avoids near-white points).
   const countFill = (c: number) =>
     d3.interpolateYlOrRd(0.12 + 0.88 * Math.sqrt(c / maxCrimes));
+
+  // Stable colour per HDBSCAN cluster of the active technique: sort the present
+  // cluster ids and assign palette entries in order (noise stays grey).
+  const clusterIds = Array.from(
+    new Set(points.map((p) => p.cluster).filter((c) => c >= 0)),
+  ).sort((a, b) => a - b);
+  const clusterColorMap = new Map<number, string>();
+  clusterIds.forEach((id, i) =>
+    clusterColorMap.set(id, CLUSTER_PALETTE[i % CLUSTER_PALETTE.length]),
+  );
+  const clusterFill = (c: number) =>
+    c < 0 ? NOISE_COLOR : clusterColorMap.get(c) ?? NOISE_COLOR;
+
   const fillOf = (p: Pt) =>
-    colorMode === "type" ? crimeColor(p.type) : countFill(p.crimes);
+    colorMode === "type"
+      ? crimeColor(p.type)
+      : colorMode === "count"
+        ? countFill(p.crimes)
+        : clusterFill(p.cluster);
 
   const isSelected = (p: Pt) =>
     selectedItem?.month === p.month && selectedItem?.rank === p.rank;
@@ -251,12 +303,41 @@ const UmapPanel: React.FC = () => {
 
   const hasLasso = lassoSelection.length > 0;
 
+  // Subgraphs in a given HDBSCAN cluster of the active technique (id < 0 = noise).
+  const clusterMembers = (id: number) =>
+    points.filter((p) => (id < 0 ? p.cluster < 0 : p.cluster === id));
+
+  // Is `id` the cluster currently selected (so the legend can show it active)?
+  const isClusterActive = (id: number) => {
+    const members = clusterMembers(id);
+    return (
+      hasLasso &&
+      members.length === lassoSelection.length &&
+      members.every((p) => lassoKeys.has(keyOf(p.month, p.rank)))
+    );
+  };
+
+  // Clicking a cluster in the legend selects all its subgraphs (and re-clicking
+  // the active one clears the selection) via the shared lasso selection, so the
+  // crime map highlights the same subgraphs.
+  const toggleCluster = (id: number) => {
+    if (isClusterActive(id)) {
+      setLassoSelection([]);
+      return;
+    }
+    setLassoSelection(
+      clusterMembers(id).map((p) => ({ month: p.month, rank: p.rank })),
+    );
+  };
+
   const spaceLabel = SPACES.find((s) => s.id === space)?.label ?? "";
   const subtitle = hasLasso
     ? `${lassoSelection.length} seleccionadas con lazo`
     : selectedPt
       ? `#${selectedPt.rank} · ${similarLinks.length} similares resaltados`
-      : `UMAP (${spaceLabel}) · ${points.length} zonas`;
+      : colorMode === "cluster"
+        ? `UMAP (${spaceLabel}) · HDBSCAN: ${clusterIds.length} clústeres`
+        : `UMAP (${spaceLabel}) · ${points.length} zonas`;
 
   return (
     <div className="umap-panel">
@@ -327,6 +408,17 @@ const UmapPanel: React.FC = () => {
               title="Color por número de delitos: permite ver si zonas vecinas (parecidas) comparten nivel de criminalidad"
             >
               Nº delitos
+            </button>
+            <button
+              type="button"
+              className={
+                "umap-panel__seg-btn" +
+                (colorMode === "cluster" ? " umap-panel__seg-btn--active" : "")
+              }
+              onClick={() => setColorMode("cluster")}
+              title="Color por clúster HDBSCAN calculado sobre este mismo UMAP (gris = ruido)"
+            >
+              Clústeres
             </button>
           </div>
         </div>
@@ -443,7 +535,7 @@ const UmapPanel: React.FC = () => {
             </li>
           ))}
         </ul>
-      ) : (
+      ) : colorMode === "count" ? (
         <div className="umap-panel__gradient-legend">
           <span className="umap-panel__legend-label">1</span>
           <div
@@ -456,6 +548,46 @@ const UmapPanel: React.FC = () => {
           />
           <span className="umap-panel__legend-label">{maxCrimes} delitos</span>
         </div>
+      ) : (
+        <ul className="umap-panel__legend">
+          {[...clusterIds, ...(points.some((p) => p.cluster < 0) ? [-1] : [])].map(
+            (id) => {
+              const active = isClusterActive(id);
+              return (
+                <li
+                  key={id}
+                  className={
+                    "umap-panel__legend-item umap-panel__legend-item--clickable" +
+                    (active ? " umap-panel__legend-item--active" : "")
+                  }
+                  role="button"
+                  tabIndex={0}
+                  aria-pressed={active}
+                  title={
+                    id < 0
+                      ? "Seleccionar todos los subgrafos marcados como ruido"
+                      : `Seleccionar todos los subgrafos del clúster C${id}`
+                  }
+                  onClick={() => toggleCluster(id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggleCluster(id);
+                    }
+                  }}
+                >
+                  <span
+                    className="umap-panel__legend-dot"
+                    style={{ background: id < 0 ? NOISE_COLOR : clusterFill(id) }}
+                  />
+                  <span className="umap-panel__legend-label">
+                    {id < 0 ? "Ruido" : `C${id}`}
+                  </span>
+                </li>
+              );
+            },
+          )}
+        </ul>
       )}
     </div>
   );

@@ -26,12 +26,35 @@ export interface Hotspot {
   pois: PoiEntry[];
   poiTypes: Record<string, number>;
   /**
-   * 2-D UMAP projection of the subgraph's embedding (topology + road class),
-   * each axis min-max scaled to [0, 1]. This is the default/primary space.
+   * 2-D UMAP projections of the subgraph's road sub-network under four modern
+   * whole-graph embedding techniques (each axis min-max scaled to [0, 1]).
    * Computed offline by preprocess_hotspots.py / embed_subgraphs.py.
+   *   embedGL2Vec  – GL2Vec (Chen & Koga, ICONIP 2019): graph2vec(G) ⊕ graph2vec(L(G)).
+   *   embedFeather – FEATHER-G (Rozemberczki & Sarkar, CIKM 2020): characteristic
+   *                  functions over random walks.
+   *   embedDHCE    – DHC-E (Wang et al., 2022): entropy of the Degree→H-index→
+   *                  Coreness chain (hyperparameter-free).
+   *   embedGCN     – GCN (Kipf & Welling, 2017): the ST-GCN spatial embedding of
+   *                  Fan, Hu & Hu (2025); graph convolution + mean-pool.
+   */
+  embedGL2Vec?: [number, number];
+  embedFeather?: [number, number];
+  embedDHCE?: [number, number];
+  embedGCN?: [number, number];
+  /**
+   * HDBSCAN cluster label of this subgraph within each technique's 2-D UMAP
+   * layout (−1 = noise). Computed offline alongside the embeddings so the
+   * painted clusters match exactly what each scatter shows.
+   */
+  clusterGL2Vec?: number;
+  clusterFeather?: number;
+  clusterDHCE?: number;
+  clusterGCN?: number;
+  /**
+   * Legacy spaces, still emitted for parity but no longer shown on the page:
+   * embed2d = topology + road class, embedTopo = topology only (NetLSD + geometry).
    */
   embed2d?: [number, number];
-  /** UMAP of the topology block only (NetLSD + geometry, no road class). */
   embedTopo?: [number, number];
   /**
    * Monthly crime counts at this basin's footprint across the whole study

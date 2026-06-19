@@ -17,6 +17,9 @@ Methodology:
 
 Requirements:
     pip install osmnx pandas numpy
+    pip install gensim            # optional: enables the graph2vec subgraph
+                                  # embedding (WL hashing + Doc2Vec); without it
+                                  # the pipeline falls back to a NetLSD trace.
 
 Usage:
     python preprocess_hotspots.py
@@ -409,19 +412,28 @@ def compute_all_similarities(output: dict, top_k: int = 5) -> None:
 #
 # WHY THIS DESIGN (closest literature)
 # ------------------------------------
-# • Topology block — NetLSD heat-kernel trace.
-#       Tsitsulin et al., "NetLSD: Hearing the Shape of a Graph", KDD 2018.
-#       The heat-kernel trace  h(t) = Σ_i exp(-t·λ_i)  of the normalized graph
-#       Laplacian is a *permutation- and size-invariant*, multi-scale spectral
-#       signature.  Size invariance is exactly what we need: our basins range
-#       from 1 to ~63 nodes, and a plain node/edge count would let size swamp
-#       the comparison.  Sampling h(t) at log-spaced scales captures local
-#       (small t) to global (large t) structure.  We keep a couple of classic,
-#       human-readable stats (log-size, density, mean degree) alongside it so
-#       the axis remains interpretable and scale is *available* but not
-#       dominant.  graph2vec (Narayanan et al., 2017, WL-subtree + doc2vec) was
-#       the alternative, but it needs a large corpus and degrades on the tiny
-#       graphs we have here — NetLSD is the better fit.
+# • Topology block — graph2vec (primary), NetLSD heat trace (fallback).
+#       graph2vec — Narayanan et al., "graph2vec: Learning Distributed
+#       Representations of Graphs", MLG 2017.  Each basin's induced road
+#       sub-network is turned into a "document" of Weisfeiler-Lehman subtree
+#       patterns and embedded with doc2vec, so the representation is *learned
+#       jointly over the whole corpus* of basins: the axes adapt to the
+#       sub-networks we actually have, and recurring motifs (a 4-way junction, a
+#       short cul-de-sac chain) get nearby vectors.  This replaces the earlier
+#       NetLSD-first choice now that the corpus (~480 basins) is large enough
+#       for the doc2vec step to learn a stable vocabulary of WL subtrees.  It is
+#       implemented directly on gensim's Doc2Vec (see _graph2vec_signatures), so
+#       there is no karateclub dependency to clash with osmnx / Python 3.13.
+#       If `gensim` is not installed (or the fit fails) we fall back to the
+#       NetLSD heat-kernel trace  h(t) = Σ_i exp(-t·λ_i)  of the normalized
+#       Laplacian (Tsitsulin et al., "NetLSD: Hearing the Shape of a Graph",
+#       KDD 2018) — a permutation- and size-invariant multi-scale spectral
+#       signature — so the pipeline always emits a topology signature.
+#       Either way we append a couple of classic, human-readable stats
+#       (log-size, density, mean degree) plus the metric-geometry features, so
+#       absolute scale and real-world shape stay available: graph2vec, like
+#       NetLSD, is blind to metric geometry (a tight straight chain and a
+#       sprawling L are the same graph to it).
 #
 # • Road-class block — "bag of road hierarchies".
 #       Each basin edge carries an OSM `highway` tag; we fold those into a small
@@ -442,14 +454,20 @@ def compute_all_similarities(output: dict, top_k: int = 5) -> None:
 # Only topology and road class feed the embedding now (see _EMBED_VARIANTS).
 _EMBED_WEIGHTS = {"topo": 1.0, "road": 1.0}
 
+# graph2vec output dimensionality (reduced to 2-D by UMAP afterwards).  64 is
+# ample for the small road sub-networks here; the default 128 would mostly add
+# noise on graphs of 1–63 nodes.
+_GRAPH2VEC_DIMS = 64
+
 # The two embedding *spaces* exposed to the front-end.  Each one is a UMAP
 # projection of a different subset of blocks, so the analyst can choose what
 # "similar" means.  Both are crime-free by design: crime is the *outcome*
 # variable, so it must never shape the layout (otherwise "similar zones with
 # different crime" would be contradictory by construction).
 #
-#   topo      – road-network *shape* only (NetLSD heat trace + structural stats
-#               + metric geometry).  Zones close here share topology only.
+#   topo      – road-network *shape* only (graph2vec signature — or a NetLSD
+#               heat trace if gensim is absent — + structural stats + metric
+#               geometry).  Zones close here share topology only.
 #   topoRoad  – shape + road hierarchy (the OSM highway class: expressway /
 #               avenue / collector / street / service).  Two basins with the
 #               same shape but built of avenues vs. residential streets now
@@ -507,22 +525,436 @@ def _heat_trace_signature(basin_ids: list[int], adj: dict[int, set], timescales)
     return [float(np.exp(-t * eig).sum() / n) for t in timescales]
 
 
-def _topology_block(basin_ids, adj, spot, timescales) -> list[float]:
-    """Heat-kernel signature + interpretable structural stats + metric geometry."""
-    heat = _heat_trace_signature(basin_ids, adj, timescales)
+def _basin_nx_graph(basin_ids: list[int], adj: dict[int, set]):
+    """Induced, undirected networkx graph of a basin (graph2vec input).
 
+    Road-node ids are relabelled to consecutive integers 0..n-1 so the WL
+    feature strings depend only on the *structure*, never on the absolute node
+    ids (which would make otherwise-identical basins look different).
+    """
+    import networkx as nx
+
+    members = set(basin_ids)
+    idx = {node: i for i, node in enumerate(basin_ids)}
+    g = nx.Graph()
+    g.add_nodes_from(range(len(basin_ids)))
+    for node in basin_ids:
+        i = idx[node]
+        for nbr in adj.get(node, ()):
+            if nbr in members and i < idx[nbr]:
+                g.add_edge(i, idx[nbr])
+    return g
+
+
+def _wl_features(graph, wl_iterations: int) -> list[str]:
+    """
+    Weisfeiler-Lehman subtree "words" for one graph — graph2vec's vocabulary.
+
+    With no node attributes, each node starts labelled by its degree; at every
+    WL round a node is relabelled to a hash of (its own label + its sorted
+    neighbour labels), which encodes the rooted subtree of growing radius around
+    it.  The multiset of all labels seen across rounds 0..k is the graph's
+    "document"; structurally similar graphs share many of these subtree words.
+    """
+    import hashlib
+
+    labels = {n: str(graph.degree(n)) for n in graph.nodes()}
+    features: list[str] = list(labels.values())  # round 0 = degree labels
+    for _ in range(wl_iterations):
+        relabelled = {}
+        for n in graph.nodes():
+            neigh = sorted(labels[m] for m in graph.neighbors(n))
+            token = labels[n] + "|" + "|".join(neigh)
+            relabelled[n] = hashlib.md5(token.encode()).hexdigest()[:12]
+        labels = relabelled
+        features.extend(labels.values())
+    return features
+
+
+def _graph2vec_signatures(
+    basin_ids_list, adj, dimensions: int = _GRAPH2VEC_DIMS, wl_iterations: int = 2
+):
+    """
+    graph2vec whole-graph embedding of every basin's induced road sub-network.
+
+    Self-contained implementation of graph2vec (Narayanan et al., 2017): each
+    graph is turned into a document of Weisfeiler-Lehman subtree patterns
+    (``_wl_features``) and the documents are embedded jointly with gensim's
+    Doc2Vec (PV-DBOW, ``dm=0``) — exactly the recipe in the paper, without the
+    karateclub package (whose pinned numpy/networkx have no Python-3.13 wheels
+    and would clash with osmnx).  Fitting over the whole corpus means
+    structurally recurring sub-networks get nearby vectors.
+
+    Returns an (N, dimensions) array aligned with ``basin_ids_list``, or None
+    when gensim is unavailable / the fit fails, so the caller can fall back to
+    the NetLSD heat trace and the pipeline still produces an embedding.
+    """
+    try:
+        from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+    except ImportError:
+        print("  gensim not installed; using NetLSD heat trace "
+              "(pip install gensim to enable graph2vec).")
+        return None
+
+    import numpy as np
+
+    try:
+        graphs = [_basin_nx_graph(b, adj) for b in basin_ids_list]
+        documents = [
+            TaggedDocument(words=_wl_features(g, wl_iterations), tags=[str(i)])
+            for i, g in enumerate(graphs)
+        ]
+        model = Doc2Vec(
+            documents,
+            vector_size=dimensions,
+            dm=0,            # PV-DBOW, as in the graph2vec paper
+            min_count=1,     # keep rare subtree patterns; the corpus is small
+            epochs=50,
+            workers=1,       # single worker → reproducible with a fixed seed
+            seed=42,
+        )
+        emb = np.array([model.dv[str(i)] for i in range(len(graphs))], dtype=np.float64)
+        print(f"  graph2vec: {len(graphs)} basins -> {emb.shape[1]}-D signature "
+              f"(WL-{wl_iterations} + Doc2Vec)")
+        return emb
+    except Exception as exc:
+        print(f"  graph2vec failed ({exc}); using NetLSD heat trace.")
+        return None
+
+
+# ─── The 4 modern urban-subgraph embedding techniques ─────────────────────────
+#
+# Each function below turns every basin's induced road sub-network into one
+# fixed-length descriptor; UMAP reduces it to 2-D for the front-end scatter.
+# All are whole-graph embeddings (one vector per subgraph), permutation/size
+# invariant, and implemented self-contained (numpy / networkx / gensim) — no
+# `karateclub` (whose pinned deps have no Python-3.13 wheels and clash with osmnx).
+#
+#   1. GL2Vec   — Chen & Koga, "GL2vec: Graph Embedding Enriched by Line Graphs
+#                 with Edge Features", ICONIP 2019.
+#   2. FEATHER-G— Rozemberczki & Sarkar, "Characteristic Functions on Graphs:
+#                 Birds of a Feather, from Statistical Descriptors to Parametric
+#                 Models", CIKM 2020.
+#   3. DHC-E    — Wang, Deng, Lü & Chen, "Hyperparameter-free and Explainable
+#                 Whole Graph Embedding", 2022 (arXiv:2108.02113).
+#   4. GCN      — graph convolution (Kipf & Welling, ICLR 2017), the spatial
+#                 embedding used in the ST-GCN module of Fan, Hu & Hu,
+#                 "Research on a Crime Spatiotemporal Prediction Method Integrating
+#                 Informer and ST-GCN: A Case Study of Four Crime Types in
+#                 Chicago", Big Data Cogn. Comput. 2025, 9(7), 179.
+
+# Output dimensionality of the two Doc2Vec halves of GL2Vec (G ⊕ L(G)); the two
+# 32-D halves concatenate to a 64-D signature, matching _GRAPH2VEC_DIMS.
+_GL2VEC_HALF_DIMS = 32
+
+
+def _gl2vec_signatures(
+    basin_ids_list, adj, half_dims: int = _GL2VEC_HALF_DIMS, wl_iterations: int = 2
+):
+    """
+    GL2Vec whole-graph embedding (Chen & Koga, ICONIP 2019).
+
+    GL2Vec enriches graph2vec by *also* embedding the **line graph** L(G) — the
+    graph whose nodes are the edges (road segments) of G, with two segments
+    adjacent when they share an intersection.  The line graph exposes structure
+    that lives on the edges (how road segments chain through junctions), which
+    graph2vec — operating only on G's nodes — misses.  As in the paper, each
+    basin's vector is the **concatenation** of the graph2vec embedding of G and
+    the graph2vec embedding of L(G).
+
+    Implementation notes
+    --------------------
+    • We embed G and L(G) with two independent Doc2Vec models (PV-DBOW), each on
+      WL-subtree documents (``_wl_features``), then hstack the two halves — the
+      paper's "concatenate the two embeddings" recipe.
+    • We use the *structural* variant of the line graph (initial node label =
+      degree), because hotspots.json stores only a per-basin road-class
+      histogram, not a per-edge class label.  This is still faithful to GL2Vec
+      (line graph + concatenation) and is what separates it from plain graph2vec.
+
+    Returns an (N, 2*half_dims) array aligned with ``basin_ids_list``, or None if
+    gensim is unavailable / the fit fails (caller falls back to NetLSD).
+    """
+    try:
+        from gensim.models.doc2vec import Doc2Vec, TaggedDocument
+    except ImportError:
+        print("  gensim not installed; GL2Vec falls back to NetLSD heat trace.")
+        return None
+
+    import networkx as nx
+    import numpy as np
+
+    def _embed(graphs, prefix: str) -> "np.ndarray":
+        docs = [
+            TaggedDocument(words=[prefix + w for w in _wl_features(g, wl_iterations)],
+                           tags=[str(i)])
+            for i, g in enumerate(graphs)
+        ]
+        model = Doc2Vec(
+            docs, vector_size=half_dims, dm=0, min_count=1, epochs=50,
+            workers=1, seed=42,
+        )
+        return np.array([model.dv[str(i)] for i in range(len(graphs))], dtype=np.float64)
+
+    try:
+        graphs = [_basin_nx_graph(b, adj) for b in basin_ids_list]
+        # Line graph of each basin; an empty/edgeless basin yields an empty L(G).
+        line_graphs = [nx.line_graph(g) for g in graphs]
+
+        g_emb = _embed(graphs, "g:")
+        l_emb = _embed(line_graphs, "l:")
+        emb = np.hstack([g_emb, l_emb])
+        print(f"  GL2Vec: {len(graphs)} basins -> {emb.shape[1]}-D signature "
+              f"(graph2vec(G) (+) graph2vec(L(G)))")
+        return emb
+    except Exception as exc:
+        print(f"  GL2Vec failed ({exc}); using NetLSD heat trace.")
+        return None
+
+
+def _feather_signatures(
+    basin_ids_list, adj, eval_points: int = 5, scales: int = 5
+):
+    """
+    FEATHER-G whole-graph embedding (Rozemberczki & Sarkar, CIKM 2020).
+
+    FEATHER describes the distribution of a node feature at multiple scales via
+    its **characteristic function** evaluated over the transition probabilities
+    of random walks.  For a node feature x and the random-walk transition matrix
+    P = D⁻¹A, the order-r, point-θ descriptor of node u is
+
+        Re:  Σ_v (P^r)_{uv} cos(θ·x_v)        Im:  Σ_v (P^r)_{uv} sin(θ·x_v)
+
+    i.e. the real/imaginary parts of E[e^{iθx}] under the r-step walk from u.
+    Pooling the node descriptors (here by mean) gives a compact, deterministic,
+    isomorphism-invariant **graph** descriptor (FEATHER-G), as the paper derives
+    when going "from statistical descriptors to parametric models".
+
+    We use the node **degree** (min-max normalized within the basin) as the
+    feature x, scales r = 1..``scales`` and ``eval_points`` evaluation points θ.
+    Edgeless basins (no walks possible) fall back to the bare feature moments so
+    every basin still gets a vector.  Returns an (N, D) numpy array.
+    """
+    import numpy as np
+
+    thetas = np.linspace(0.5, 2.5, eval_points)
+    # Per basin: 2 (Re/Im) · scales · eval_points pooled values.
+    desc_dim = 2 * scales * eval_points
+    out = np.zeros((len(basin_ids_list), desc_dim), dtype=np.float64)
+
+    for bi, basin_ids in enumerate(basin_ids_list):
+        n = len(basin_ids)
+        if n == 0:
+            continue
+
+        idx = {node: i for i, node in enumerate(basin_ids)}
+        members = set(basin_ids)
+        A = np.zeros((n, n), dtype=np.float64)
+        for node in basin_ids:
+            for nbr in adj.get(node, ()):
+                if nbr in members:
+                    A[idx[node], idx[nbr]] = 1.0
+
+        deg = A.sum(axis=1)
+        # Node feature x = degree, min-max normalized within the basin to [0, 1].
+        x = deg.copy()
+        rng = x.max() - x.min()
+        x = (x - x.min()) / rng if rng > 1e-9 else np.zeros_like(x)
+
+        if deg.sum() == 0:
+            # No edges → no random walk. Use the raw characteristic function of x
+            # (the "0-step" walk: each node sees only itself) so the descriptor is
+            # still defined and comparable in shape to the walked ones.
+            feats = []
+            for _ in range(scales):
+                for th in thetas:
+                    feats.append(float(np.cos(th * x).mean()))
+                    feats.append(float(np.sin(th * x).mean()))
+            out[bi] = feats
+            continue
+
+        d_inv = np.where(deg > 0, 1.0 / deg, 0.0)
+        P = d_inv[:, None] * A  # row-stochastic transition matrix P = D⁻¹A
+
+        feats = []
+        Pr = np.eye(n)
+        for _ in range(scales):
+            Pr = Pr @ P  # P^r for r = 1..scales
+            for th in thetas:
+                re = (Pr @ np.cos(th * x))   # per-node real part
+                im = (Pr @ np.sin(th * x))   # per-node imaginary part
+                feats.append(float(re.mean()))  # mean-pool over nodes → graph level
+                feats.append(float(im.mean()))
+        out[bi] = feats
+
+    print(f"  FEATHER-G: {len(basin_ids_list)} basins -> {desc_dim}-D signature "
+          f"(characteristic functions over {scales}-step random walks)")
+    return out
+
+
+def _dhce_signatures(basin_ids_list, adj, length: int = 16):
+    """
+    DHC-E whole-graph embedding (Wang, Deng, Lü & Chen, 2022; arXiv:2108.02113).
+
+    DHC-E is hyperparameter-free and explainable.  It iterates the **DHC operator**
+    — by the DHC theorem the fixed point of repeatedly replacing every node's
+    value with the *H-index* of its neighbours' values is the node's **coreness**,
+    and the chain Degree → H-index → … → Coreness encodes multi-scale structure.
+    At each iteration t we take the **Shannon entropy** E_t of the (normalized)
+    histogram of node values; the embedding is the entropy sequence
+    [E_0, E_1, …], padded/truncated to a fixed ``length`` so all basins align.
+
+    H-index of a multiset S = the largest h such that at least h elements of S are
+    ≥ h.  Returns an (N, length) numpy array.
+    """
+    import numpy as np
+
+    def _h_index(values) -> int:
+        s = sorted(values, reverse=True)
+        h = 0
+        for i, v in enumerate(s, start=1):
+            if v >= i:
+                h = i
+            else:
+                break
+        return h
+
+    def _entropy(values) -> float:
+        # Shannon entropy of the empirical distribution of the integer values,
+        # normalized to [0, 1] by log(#distinct) so basins of different size are
+        # comparable.
+        vals, counts = np.unique(np.asarray(values), return_counts=True)
+        if len(vals) <= 1:
+            return 0.0
+        p = counts / counts.sum()
+        ent = float(-(p * np.log(p)).sum())
+        return ent / math.log(len(vals))
+
+    out = np.zeros((len(basin_ids_list), length), dtype=np.float64)
+
+    for bi, basin_ids in enumerate(basin_ids_list):
+        n = len(basin_ids)
+        if n == 0:
+            continue
+
+        members = set(basin_ids)
+        neighbours = {
+            node: [nb for nb in adj.get(node, ()) if nb in members]
+            for node in basin_ids
+        }
+        # Iteration 0: degree.
+        value = {node: len(neighbours[node]) for node in basin_ids}
+
+        seq = [_entropy(list(value.values()))]
+        for _ in range(length - 1):
+            nxt = {
+                node: _h_index([value[nb] for nb in neighbours[node]])
+                for node in basin_ids
+            }
+            seq.append(_entropy(list(nxt.values())))
+            if nxt == value:        # reached the coreness fixed point
+                break
+            value = nxt
+
+        # Pad the converged tail with its last entropy so every row has `length`.
+        seq = (seq + [seq[-1]] * length)[:length]
+        out[bi] = seq
+
+    print(f"  DHC-E: {len(basin_ids_list)} basins -> {length}-D signature "
+          f"(entropy of the Degree -> H-index -> Coreness chain)")
+    return out
+
+
+# GCN hidden width and depth. 2 layers = 2-hop receptive field, matching the
+# small basins here; 16 hidden units is ample for graphs of 1-63 nodes.
+_GCN_HIDDEN = 16
+_GCN_LAYERS = 2
+
+
+def _gcn_signatures(basin_ids_list, adj, hidden: int = _GCN_HIDDEN, layers: int = _GCN_LAYERS):
+    """
+    GCN spatial embedding — graph convolution of Kipf & Welling (ICLR 2017),
+    the spatial-feature extractor used in the ST-GCN module of Fan, Hu & Hu
+    (Big Data Cogn. Comput. 2025, 9(7), 179) for Chicago crime prediction.
+
+    Each GCN layer is the paper's Eq. (7):
+
+        H' = ReLU( D̃^{-1/2} (A + I) D̃^{-1/2} · H · W )
+
+    i.e. every node mixes its neighbours' features through the symmetric-
+    normalized adjacency (with self-loops), then a linear map + ReLU.  Stacking
+    `layers` of these gives each node a `layers`-hop structural embedding; we
+    **mean-pool** the node embeddings into one whole-graph descriptor per basin.
+
+    Unsupervised use
+    ----------------
+    The paper trains the GCN against crime counts, but here crime must NOT shape
+    the layout (it is the outcome we want to read off the map).  So we run an
+    **untrained GCN with fixed random weights** (seed=42) — a standard structural
+    feature extractor: the informative part is the normalized-adjacency diffusion
+    of the node features, not the learned weights.  Node features are structure-
+    only: [1, degree, log1p(degree)].
+
+    Returns an (N, hidden) numpy array aligned with `basin_ids_list`.
+    """
+    import numpy as np
+
+    rng = np.random.default_rng(42)
+    in_dim = 3  # node features: [1, degree, log1p(degree)]
+    # Fixed random layer weights (Xavier-like scaling), shared across all basins.
+    weights = []
+    d_prev = in_dim
+    for _ in range(layers):
+        weights.append(rng.standard_normal((d_prev, hidden)) / math.sqrt(d_prev))
+        d_prev = hidden
+
+    out = np.zeros((len(basin_ids_list), hidden), dtype=np.float64)
+
+    for bi, basin_ids in enumerate(basin_ids_list):
+        n = len(basin_ids)
+        if n == 0:
+            continue
+
+        idx = {node: i for i, node in enumerate(basin_ids)}
+        members = set(basin_ids)
+        A = np.zeros((n, n), dtype=np.float64)
+        for node in basin_ids:
+            for nbr in adj.get(node, ()):
+                if nbr in members:
+                    A[idx[node], idx[nbr]] = 1.0
+
+        # Symmetric-normalized adjacency with self-loops: Â = D̃^{-1/2}(A+I)D̃^{-1/2}.
+        A_hat = A + np.eye(n)
+        deg = A_hat.sum(axis=1)
+        d_inv_sqrt = 1.0 / np.sqrt(deg)
+        A_norm = d_inv_sqrt[:, None] * A_hat * d_inv_sqrt[None, :]
+
+        deg_in = A.sum(axis=1)  # within-basin degree (excludes the self-loop)
+        H = np.column_stack([np.ones(n), deg_in, np.log1p(deg_in)])
+        for W in weights:
+            H = np.maximum(A_norm @ H @ W, 0.0)  # GCN layer + ReLU
+
+        out[bi] = H.mean(axis=0)  # mean-pool node embeddings -> graph descriptor
+
+    print(f"  GCN: {len(basin_ids_list)} basins -> {hidden}-D signature "
+          f"({layers}-layer Kipf-Welling GCN + mean-pool, untrained)")
+    return out
+
+
+def _topology_block(spot: dict, signature) -> list[float]:
+    """Topology signature (graph2vec or NetLSD) + structural stats + metric geometry."""
     node_count = len(spot["nodes"])
     edge_count = len(spot["edges"])
     max_possible = node_count * (node_count - 1) / 2
     density = edge_count / max_possible if max_possible > 0 else 0.0
     mean_deg = (2 * edge_count / node_count) if node_count > 0 else 0.0
 
-    # log-size is kept as an explicit (single) scale feature: NetLSD is size
-    # invariant on purpose, but for crime basins absolute extent still matters.
-    # The geometry features add what the heat trace cannot see — inter-node
-    # distances and shape (a tight straight chain vs. a spread-out L look the
-    # same to NetLSD, but differ here).
-    return heat + [math.log1p(node_count), density, mean_deg] + _geometry_features(spot)
+    # The learned/spectral signature is blind to absolute scale and to metricHDB SCAM
+    # geometry, so we append a single explicit scale feature (log-size) with
+    # density / mean-degree, plus the geometry features — inter-node distances
+    # and shape (a tight straight chain vs. a spread-out L look the same to the
+    # signature, but differ here).
+    return list(signature) + [math.log1p(node_count), density, mean_deg] + _geometry_features(spot)
 
 
 def _history_block(basin_ids, month, node_month_counts, months) -> list[float]:
@@ -614,6 +1046,47 @@ def _standardize(block):
     return out
 
 
+# HDBSCAN parameters for clustering each UMAP layout. With ~480 points,
+# min_cluster_size=8 keeps clusters meaningful while min_samples=4 (< size)
+# keeps the noise set from swallowing too many points.
+_HDBSCAN_MIN_CLUSTER_SIZE = 8
+_HDBSCAN_MIN_SAMPLES = 4
+
+
+def _hdbscan_labels(coords, min_cluster_size: int = _HDBSCAN_MIN_CLUSTER_SIZE,
+                    min_samples: int = _HDBSCAN_MIN_SAMPLES) -> list[int]:
+    """
+    Density-based clustering (HDBSCAN) of a 2-D point cloud.
+
+    Runs directly on the UMAP layout of one embedding technique, so the painted
+    clusters match exactly what the analyst sees on that scatter.  Returns one
+    integer label per point (-1 = noise, HDBSCAN's convention).  Prefers
+    scikit-learn's HDBSCAN (>=1.3); falls back to the standalone `hdbscan`
+    package, and finally to all-noise so the pipeline never breaks.
+    """
+    import numpy as np
+
+    pts = np.asarray(coords, dtype=np.float64)
+    n = len(pts)
+    if n < min_cluster_size:
+        return [-1] * n
+
+    try:
+        from sklearn.cluster import HDBSCAN
+        labels = HDBSCAN(min_cluster_size=min_cluster_size,
+                         min_samples=min_samples).fit_predict(pts)
+    except Exception:
+        try:
+            import hdbscan
+            labels = hdbscan.HDBSCAN(min_cluster_size=min_cluster_size,
+                                     min_samples=min_samples).fit_predict(pts)
+        except Exception as exc:
+            print(f"  HDBSCAN unavailable ({exc}); points left unclustered.")
+            return [-1] * n
+
+    return [int(x) for x in labels]
+
+
 def compute_subgraph_embeddings(
     output: dict,
     adj: dict[int, set],
@@ -625,27 +1098,35 @@ def compute_subgraph_embeddings(
     embedding *variant* (see _EMBED_VARIANTS) to 2-D.
 
     Adds, in place, to each hotspot:
-      embedTopo – [x, y] from topology only (NetLSD + geometry)
-      embed2d   – [x, y] from topology + road class (the primary/default space)
+      embedGL2Vec – [x, y] from GL2Vec  (graph2vec(G) ⊕ graph2vec(L(G)))
+      embedFeather– [x, y] from FEATHER-G (characteristic functions / random walks)
+      embedDHCE   – [x, y] from DHC-E   (Degree→H-index→Coreness entropy chain)
+      embedGCN    – [x, y] from a GCN   (Kipf-Welling graph conv + mean-pool;
+                                         the ST-GCN spatial module of Fan et al. 2025)
+      embedTopo   – [x, y] from topology only (graph2vec / NetLSD + geometry)  [legacy]
+      embed2d     – [x, y] from topology + road class                          [legacy]
       history – monthly crime counts at the basin's footprint, aligned with
                 the sorted `months` list (raw series for the front-end chart;
                 it no longer feeds the embedding coordinates).
+
+    The four modern techniques (GL2Vec / FEATHER-G / DHC-E / GCN) are the spaces
+    the front-end UMAP exposes; the legacy topo / topoRoad variants are still
+    emitted for parity but are no longer shown.
 
     Expects a temporary `_basinIds` field on each spot (stripped by the caller),
     and a `roadTypes` edge-class histogram (written by the main pipeline).
     """
     import numpy as np
 
-    timescales = _heat_timescales()
-
     keys: list[tuple[str, int]] = []
-    topo, road = [], []
+    basin_ids_list: list[list[int]] = []
+    road = []
 
     for month, spots in output.items():
         for spot in spots:
             basin_ids = spot.get("_basinIds", [])
             keys.append((month, spot["rank"]))
-            topo.append(_topology_block(basin_ids, adj, spot, timescales))
+            basin_ids_list.append(basin_ids)
             road.append(_road_block(spot))
             # Raw monthly series at this footprint (for the front-end chart).
             spot["history"] = [
@@ -653,16 +1134,41 @@ def compute_subgraph_embeddings(
                 for m in months
             ]
 
+    # All 2-D fields written by this function (legacy variants + 4 techniques).
+    all_fields = list(_EMBED_FIELD.values()) + [
+        "embedGL2Vec", "embedFeather", "embedDHCE", "embedGCN",
+    ]
+
+    # Cluster-label fields (one per technique; −1 = noise, HDBSCAN convention).
+    cluster_fields = ["clusterGL2Vec", "clusterFeather", "clusterDHCE", "clusterGCN"]
+
     if len(keys) < 2:
         for spots in output.values():
             for spot in spots:
-                for field in _EMBED_FIELD.values():
+                for field in all_fields:
                     spot[field] = [0.5, 0.5]
+                for field in cluster_fields:
+                    spot[field] = -1
         return
 
+    # Topology signature per basin: graph2vec when gensim is available, else a
+    # NetLSD heat-kernel trace, so the layout survives a missing optional dep.
+    signatures = _graph2vec_signatures(basin_ids_list, adj)
+    if signatures is None:
+        timescales = _heat_timescales()
+        signatures = np.array(
+            [_heat_trace_signature(b, adj, timescales) for b in basin_ids_list],
+            dtype=np.float64,
+        )
+
+    # Assemble the topology block (signature + structural stats + geometry) in
+    # the same order as `keys`, so it stays row-aligned with the road block.
+    spots_in_order = [spot for spots in output.values() for spot in spots]
+    topo = [_topology_block(spot, signatures[i]) for i, spot in enumerate(spots_in_order)]
+
     # Standardize each block independently, weight it, then concatenate.  This
-    # keeps a 16-D spectral topology block from being drowned out by the smaller
-    # road-class block purely because of differing dimensionality / scale.
+    # keeps the high-dimensional topology block from being drowned out by the
+    # smaller road-class block purely because of differing dimensionality / scale.
     blocks = {
         "topo": _standardize(np.array(topo, dtype=np.float64)),
         "road": _standardize(np.array(road, dtype=np.float64)),
@@ -689,8 +1195,11 @@ def compute_subgraph_embeddings(
             _, _, Vt = np.linalg.svd(Xc, full_matrices=False)
             return Xc @ Vt[:2].T, "PCA"
 
-    for variant, block_names in _EMBED_VARIANTS.items():
-        X = np.hstack([blocks[name] * _EMBED_WEIGHTS[name] for name in block_names])
+    def _project_and_write(name: str, X: "np.ndarray", field: str,
+                           cluster_field: str | None = None) -> None:
+        """Project a descriptor to 2-D, min-max scale, write `field`, and —
+        when `cluster_field` is given — HDBSCAN-cluster the 2-D layout and write
+        the integer cluster label (−1 = noise) of each subgraph to it."""
         emb, method = _project(X)
 
         # Min-max scale each axis to [0, 1] so the front-end can plot without
@@ -700,14 +1209,60 @@ def compute_subgraph_embeddings(
         rng = np.where(emb.max(axis=0) > lo, emb.max(axis=0) - lo, 1.0)
         emb = (emb - lo) / rng
 
-        field = _EMBED_FIELD[variant]
+        # Cluster the (scaled) 2-D layout so the painted clusters match the plot.
+        labels = _hdbscan_labels(emb) if cluster_field else None
+
         for month, spots in output.items():
             for spot in spots:
                 i = key_to_idx[(month, spot["rank"])]
                 spot[field] = [round(float(emb[i, 0]), 4), round(float(emb[i, 1]), 4)]
+                if labels is not None:
+                    spot[cluster_field] = labels[i]
 
-        print(f"  {method} '{variant}' embedding for {len(keys)} subgraphs "
-              f"({X.shape[1]}-D descriptor -> 2-D -> {field})")
+        msg = (f"  {method} '{name}' embedding for {len(keys)} subgraphs "
+               f"({X.shape[1]}-D descriptor -> 2-D -> {field})")
+        if labels is not None:
+            n_clusters = len({l for l in labels if l >= 0})
+            n_noise = sum(1 for l in labels if l < 0)
+            msg += f"; HDBSCAN -> {n_clusters} clusters, {n_noise} noise -> {cluster_field}"
+        print(msg)
+
+    # Legacy variants (topo / topoRoad) — still emitted for parity.
+    for variant, block_names in _EMBED_VARIANTS.items():
+        X = np.hstack([blocks[name] * _EMBED_WEIGHTS[name] for name in block_names])
+        _project_and_write(variant, X, _EMBED_FIELD[variant])
+
+    # ── The 3 modern techniques shown on the page ────────────────────────────
+    # Each produces its own high-D descriptor over the basins' road sub-networks;
+    # we standardize it and project to 2-D exactly like the legacy variants, so
+    # all spaces are directly comparable on the scatter.
+
+    # 1. GL2Vec — graph2vec(G) ⊕ graph2vec(L(G)); NetLSD fallback if gensim absent.
+    gl2vec = _gl2vec_signatures(basin_ids_list, adj)
+    if gl2vec is None:
+        timescales = _heat_timescales()
+        gl2vec = np.array(
+            [_heat_trace_signature(b, adj, timescales) for b in basin_ids_list],
+            dtype=np.float64,
+        )
+    _project_and_write("GL2Vec", _standardize(np.asarray(gl2vec, dtype=np.float64)),
+                       "embedGL2Vec", "clusterGL2Vec")
+
+    # 2. FEATHER-G — characteristic functions over random walks (deterministic).
+    feather = _feather_signatures(basin_ids_list, adj)
+    _project_and_write("FEATHER-G", _standardize(np.asarray(feather, dtype=np.float64)),
+                       "embedFeather", "clusterFeather")
+
+    # 3. DHC-E — entropy of the Degree→H-index→Coreness chain (hyperparameter-free).
+    dhce = _dhce_signatures(basin_ids_list, adj)
+    _project_and_write("DHC-E", _standardize(np.asarray(dhce, dtype=np.float64)),
+                       "embedDHCE", "clusterDHCE")
+
+    # 4. GCN — Kipf-Welling graph convolution + mean-pool; the ST-GCN spatial
+    #    embedding of Fan, Hu & Hu (2025). Untrained (crime must not shape layout).
+    gcn = _gcn_signatures(basin_ids_list, adj)
+    _project_and_write("GCN", _standardize(np.asarray(gcn, dtype=np.float64)),
+                       "embedGCN", "clusterGCN")
 
 
 # ─── POI fetching & assignment ────────────────────────────────────────────────

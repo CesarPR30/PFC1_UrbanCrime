@@ -18,6 +18,8 @@ export interface TimelineMarker {
   month: string; // "YYYY-MM" (1-based month, as in the hotspots data)
   rank: number;
   kind: "selected" | "similar";
+  /** Short tag drawn inside the marker ("R" = reference, "A".."E" = similars). */
+  label?: string;
 }
 
 interface Props {
@@ -25,11 +27,13 @@ interface Props {
   onFilter: (filtered: CrimeRecord[]) => void;
   /** Subgraphs to mark on the axis (selected + its similar ones). */
   markers?: TimelineMarker[];
+  /** Clicking a marker letter calls this (used to fly to it on the map). */
+  onMarkerClick?: (month: string, rank: number) => void;
 }
 
 const M = { top: 10, right: 16, bottom: 26, left: 36 };
 
-const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [] }) => {
+const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [], onMarkerClick }) => {
   const svgRef = useRef<SVGSVGElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const brushRef = useRef<d3.BrushBehavior<unknown> | null>(null);
@@ -46,6 +50,8 @@ const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [] }) => {
   onFilterRef.current = onFilter;
   const dataRef = useRef(data);
   dataRef.current = data;
+  const onMarkerClickRef = useRef(onMarkerClick);
+  onMarkerClickRef.current = onMarkerClick;
 
   const buckets = useMemo<MonthBucket[]>(() => {
     const map = new Map<string, number>();
@@ -288,27 +294,73 @@ const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [] }) => {
       return `${y}-${String(parseInt(mo) - 1).padStart(2, "0")}`;
     };
 
+    const visible = markers.filter(mk => x(toBucketKey(mk.month)) != null);
+
+    // When several markers fall in the same month they would stack at the same
+    // x and hide each other, so fan them out symmetrically around the month tick.
+    const SPREAD = 16; // ≈ badge diameter, so neighbours just clear each other
+    const offsetByKey = new Map<string, number>();
+    d3.group(visible, mk => toBucketKey(mk.month)).forEach(group => {
+      const n = group.length;
+      group.forEach((mk, i) => {
+        offsetByKey.set(`${mk.month}|${mk.rank}`, (i - (n - 1) / 2) * SPREAD);
+      });
+    });
+    const dxOf = (mk: TimelineMarker) =>
+      offsetByKey.get(`${mk.month}|${mk.rank}`) ?? 0;
+
+    // Raise the markers above the (invisible) brush overlay so the badges are
+    // clickable; the group itself stays pointer-transparent so dragging the
+    // brush still works everywhere except right on a badge.
+    g.raise();
+
     const sel = g.selectAll<SVGGElement, TimelineMarker>("g.marker")
-      .data(markers.filter(mk => x(toBucketKey(mk.month)) != null), mk => `${mk.month}|${mk.rank}`);
+      .data(visible, mk => `${mk.month}|${mk.rank}`);
     sel.exit().remove();
 
     const enter = sel.enter().append("g").attr("class", "marker");
-    enter.append("line");
-    enter.append("circle");
+    enter.append("path");   // connector: vertical on the month, then a dog-leg
+    enter.append("circle"); // badge, offset to the side
+    // Letter badge ("R" / "A".."E") so each flag is identifiable at a glance.
+    enter.append("text");
+
+    // The connector runs straight up the month tick, then bends to reach the
+    // offset badge so the line still clearly "belongs" to its month.
+    const BEND_Y = 18; // px below the top where the dog-leg starts
 
     const merged = enter.merge(sel);
+    // Anchor the whole marker on the true month position (no horizontal offset).
     merged.attr("transform", mk => `translate(${x(toBucketKey(mk.month))},0)`);
-    merged.select("line")
-      .attr("x1", 0).attr("x2", 0).attr("y1", 0).attr("y2", iH)
+    merged.select<SVGPathElement>("path")
+      .attr("d", mk => `M0,${iH} L0,${BEND_Y} L${dxOf(mk)},0`)
+      .attr("fill", "none")
       .attr("stroke", mk => (mk.kind === "selected" ? "#FE550B" : "#0D9488"))
       .attr("stroke-width", mk => (mk.kind === "selected" ? 2 : 1))
       .attr("stroke-dasharray", mk => (mk.kind === "selected" ? "none" : "3 2"))
+      .attr("stroke-linejoin", "round")
       .attr("opacity", mk => (mk.kind === "selected" ? 0.85 : 0.5));
-    merged.select("circle")
-      .attr("cx", 0).attr("cy", 0)
-      .attr("r", mk => (mk.kind === "selected" ? 4 : 3))
+    // Circle sized to hold the letter; offset to the side, clickable to fly to it.
+    merged.select<SVGCircleElement>("circle")
+      .attr("cx", mk => dxOf(mk)).attr("cy", 0)
+      .attr("r", mk => (mk.kind === "selected" ? 8 : 7))
       .attr("fill", mk => (mk.kind === "selected" ? "#FE550B" : "#0D9488"))
-      .attr("stroke", "#fff").attr("stroke-width", 1.2);
+      .attr("stroke", "#fff").attr("stroke-width", 1.2)
+      .style("pointer-events", "auto")
+      .style("cursor", "pointer")
+      .on("click", (_event, mk) => onMarkerClickRef.current?.(mk.month, mk.rank));
+    merged.select<SVGTextElement>("text")
+      .attr("x", mk => dxOf(mk)).attr("y", 0)
+      .attr("dy", "0.34em")
+      .attr("text-anchor", "middle")
+      .attr("font-size", mk => (mk.kind === "selected" ? 9 : 8))
+      .attr("font-weight", 700)
+      .attr("fill", "#fff")
+      .style("pointer-events", "none")
+      .text(mk => mk.label ?? "");
+    merged.select<SVGCircleElement>("circle").select("title").remove();
+    merged.select<SVGCircleElement>("circle")
+      .append("title")
+      .text(mk => `${mk.label ? mk.label + " · " : ""}#${mk.rank} · clic para verlo en el mapa`);
   }, [markers, buckets]);
 
   return (

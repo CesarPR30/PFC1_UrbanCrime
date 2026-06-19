@@ -2,8 +2,9 @@
 """
 embed_subgraphs.py
 
-Augments an existing public/hotspots.json with a 2-D subgraph embedding
-(`embed2d`) WITHOUT re-downloading the Chicago road network.
+Augments an existing public/hotspots.json with the 2-D subgraph embeddings
+(`embedGL2Vec`, `embedFeather`, `embedDHCE`, `embedGCN`, plus the legacy
+`embed2d` / `embedTopo`) WITHOUT re-downloading the Chicago road network.
 
 It reuses the *exact* embedding logic from preprocess_hotspots.py
 (`compute_subgraph_embeddings` and its block builders) — the only difference is
@@ -113,7 +114,7 @@ def main() -> None:
 
     with open("public/hotspots.json", "w", encoding="utf-8") as fh:
         json.dump(output, fh, separators=(",", ":"))
-    print("Wrote embed2d into public/hotspots.json")
+    print("Wrote embedGL2Vec / embedFeather / embedDHCE / embedGCN into public/hotspots.json")
 
 
 if __name__ == "__main__":

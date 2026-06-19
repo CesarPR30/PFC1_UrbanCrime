@@ -441,6 +441,30 @@
   flex-shrink: 0;
 }
 
+/* Letter badge ("R" / "A".."E") matching the timeline markers, so each row in
+   the list maps to its flag on the timeline at a glance. */
+.candidates__letter {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  line-height: 1;
+}
+
+.candidates__letter--ref {
+  background: #fe550b;
+}
+
+.candidates__letter--sim {
+  background: #0d9488;
+}
+
 .candidates__info {
   display: flex;
   flex-direction: column;
@@ -965,6 +989,25 @@
   display: flex;
   align-items: center;
   gap: 5px;
+}
+
+/* Clickable cluster legend chips: click one to select its whole cluster. */
+.umap-panel__legend-item--clickable {
+  cursor: pointer;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.umap-panel__legend-item--clickable:hover {
+  background: rgba(17, 24, 39, 0.06);
+}
+
+.umap-panel__legend-item--active {
+  border-color: #111827;
+  background: rgba(17, 24, 39, 0.08);
+  font-weight: 600;
 }
 
 .umap-panel__legend-dot {
