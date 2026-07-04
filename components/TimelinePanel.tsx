@@ -51,6 +51,7 @@ const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [], onMarker
   const dataRef = useRef(data);
   dataRef.current = data;
   const onMarkerClickRef = useRef(onMarkerClick);
+  const [size, setSize] = useState({ width: 0, height: 0 });
   onMarkerClickRef.current = onMarkerClick;
 
   const buckets = useMemo<MonthBucket[]>(() => {
@@ -88,8 +89,8 @@ const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [], onMarker
     const svgEl = svgRef.current;
     if (!container || !svgEl || buckets.length === 0) return;
 
-    const W = container.clientWidth;
-    const H = container.clientHeight;
+    const W = size.width;
+    const H = size.height;
     const iW = W - M.left - M.right;
     const iH = H - M.top - M.bottom;
     if (iW <= 0 || iH <= 0) return;
@@ -277,8 +278,24 @@ const TimelinePanel: React.FC<Props> = ({ data, onFilter, markers = [], onMarker
     brushG.select(".selection").attr("fill", "none").attr("stroke", "none");
     brushG.selectAll(".handle").remove();
 
-  }, [buckets, multiYear]);
+  }, [buckets, multiYear, size.width, size.height]);
 
+  useEffect(() => {
+  if (!containerRef.current) return;
+
+  const observer = new ResizeObserver(entries => {
+    const { width, height } = entries[0].contentRect;
+
+    setSize({
+      width,
+      height,
+    });
+  });
+
+  observer.observe(containerRef.current);
+
+  return () => observer.disconnect();
+}, []);
   // Draw the subgraph month markers. Runs on its own (also after the main
   // effect rebuilds, since `buckets` is a dep) so a live brush isn't disturbed.
   useEffect(() => {
